@@ -4,7 +4,7 @@ import term
 import strings
 
 // always wondered why string_builder.str() cleared the array...
-// warning: somehow checks out, but MEGA unsafe ><
+// warning: somehow checks out, but very unsafe
 fn (mut c CREPL) accum_source() string {
 	concatlen := c.source.len + end.len
 	bcopy := unsafe { malloc_noscan(concatlen + 1) }
@@ -20,11 +20,15 @@ struct CREPL {
 	cc_exe string
 mut:
 	readline readline.Readline
-	prompt string = prompt_default
+	prompt string = prompt_default 
 
-	success_idx int = begin.len
-	// place we know crepl can return to
-	// in a cc error
+	// undo redo operations
+	last_edit_idx int
+	current_idx int
+	history_idx []int
+
+	brace_level int
+	multiline_source strings.Builder
 
 	source strings.Builder
 }
@@ -56,12 +60,11 @@ fn (mut r CREPL) call_cc() bool {
 	if proc.code != 0 {
 		eprintln(proc.stderr_slurp())
 		// essentially undo line now
-		unsafe { r.source.len = r.success_idx }
+		unsafe { r.source.len = r.history_idx[r.current_idx] }
 		return false
 	}
-	r.success_idx = r.source.len
 	output := os.execute("./$tmp_exe").output
-	if output != '' {
+	if output.len != 0 {
 		println(output)
 	}
 	return true
@@ -70,11 +73,25 @@ fn new_crepl() CREPL {
 	mut a := strings.new_builder(100)
 	a.write_string(begin)
 	cc_exe, cc := get_cc_dir()
-	return CREPL{
+	mut history_idx := []int{cap: 21}
+	history_idx << begin.len
+	return CREPL {
 		cc_exe: cc_exe
 		cc: cc
 		source: mut a
+		history_idx: mut history_idx 
+		multiline_source: strings.new_builder(40)
 	}
+}
+
+fn reset_crepl(mut r CREPL) {
+	// why waste precious time in freeing and reallocating?
+	unsafe {
+		r.source.len = begin.len
+		r.multiline_source.len = 0
+		r.history_idx.len = 1
+	}
+	r.current_idx = 0
 }
 
 const is_pipe = os.is_atty(0) == 0
@@ -135,11 +152,6 @@ fn main(){
 		eprintln(r.cc_exe)
 		eprintln('')
 	}
-	defer {
-		if !is_pipe {
-			println('')
-		}
-	}
 	for {
 		rline := r.line() or {
 			break
@@ -148,7 +160,7 @@ fn main(){
 		if line == '' && rline.ends_with('\n') {
 			continue
 		}
-		if line.len <= -1 || line == '' || line == 'exit' {
+		if line.len <= -1 || line == '' {
 			break
 		}
 		match line {
@@ -171,15 +183,80 @@ fn main(){
 				r.call_cc()
 			}
 			'reset' {
-				unsafe { r.source.len = 0 }
-				r.source.write_string(begin)
-				r.success_idx = begin.len
+				reset_crepl(mut r)
+			}
+			'undo' {
+				if r.current_idx <= 0 {
+					println(info("Nothing to undo"))
+				} else {
+					r.current_idx--
+					unsafe { r.source.len = r.history_idx[r.current_idx] }
+				}
+			}
+			'redo' {
+				if r.current_idx < r.last_edit_idx {
+					r.current_idx++
+					unsafe { r.source.len = r.history_idx[r.current_idx] }
+				} else {
+					println(info("Nothing to redo"))
+				}
+			}
+			'clear' {
+				term.erase_clear()
 			}
 			else {
-				r.source.write_u8(`\t`)
-				r.source.writeln(line)
-				r.call_cc()
+				do_flush := r.count_braces(line)
+
+				if r.brace_level != 0 {
+					r.prompt = prompt_indent
+					r.multiline_source.write_u8(`\t`)
+					r.multiline_source.writeln(line)
+					continue
+				}
+
+				if do_flush {
+					r.source.write_u8(`\t`)
+					r.source.writeln(r.multiline_source.str())
+					// sets length to 0, does not free; keeps cap
+				} else {
+					r.source.write_u8(`\t`)
+					r.source.writeln(line)
+				}
+				if r.call_cc() {
+					r.current_idx++
+					if r.history_idx.len <= r.current_idx {
+						r.history_idx << r.source.len
+					} else {
+						r.history_idx[r.current_idx] = r.source.len
+					}
+					r.last_edit_idx = r.current_idx
+				}
+				if r.prompt != prompt_default {
+					r.prompt = prompt_default
+				}
 			}
 		}
 	}
+	if !is_pipe {
+		println('')
+	}
+}
+
+[direct_array_access]
+fn (mut r CREPL) count_braces(s string) bool {
+	o_br := r.brace_level
+	for letter in s {
+		if letter == `{` {
+			r.brace_level++
+		} else if letter == `}` {
+			if r.brace_level == 0 {
+				// subject is uncooperative
+				// terminate now
+				return false
+			}
+			r.brace_level--
+		}
+	}
+	return o_br != r.brace_level && r.brace_level == 0
+	// short circut action!
 }
