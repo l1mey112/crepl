@@ -8,15 +8,20 @@ fn trace(str string){
 	eprintln(":: $str")
 } */
 
-fn (mut c CREPL) accum_source() string {
+fn (mut c CREPL) accum_source(bu int, s string, prepend_tab bool) string {
 	// better to allocate all in one go...
-	mut len := end.len
+	mut len := end.len + s.len + int(prepend_tab)
 	for b in c.source_buckets {
 		len += b.source.len
 	}
 	mut a := strings.new_builder(len)
-	for b in c.source_buckets {
-		if b.source.len == 0 {
+	for idx, b in c.source_buckets {
+		if idx == bu {
+			if prepend_tab {
+				a.write_u8(`\t`)	
+			}
+			a.writeln(s)
+		} else if b.source.len == 0 {
 			continue
 		}
 		a << b.source
@@ -49,8 +54,8 @@ mut:
 	last_edit_idx int = -1
 	current_idx int
 
-	ctx &SourceBucket = unsafe { nil } // wooo scary!!!
-	ctxidx int = -1
+//	ctx &SourceBucket = unsafe { nil } // wooo scary!!!
+//	ctxidx int = -1
 
 	brace_level int
 	multiline_source strings.Builder
@@ -72,8 +77,8 @@ fn get_cc_dir() (string, string) {
 	panic("coult not find cc!!!!! todowo:")
 }
 
-fn (mut r CREPL) call_cc() bool {
-	os.write_file(tmp_file, r.accum_source()) or { panic(err) }
+fn (mut r CREPL) call_cc(b int, s string, pt bool) bool {
+	os.write_file(tmp_file, r.accum_source(b, s, pt)) or { panic(err) }
 
 	mut proc := os.new_process(r.cc_exe)
 	proc.set_args([tmp_file,'-o',tmp_exe])
@@ -221,7 +226,7 @@ fn main(){
 		match line {
 			'exit' { break }
 			'list' {
-				println(info(r.accum_source()))
+				println(info(r.accum_source(-1,'',false)))
 			}
 			'cc' {
 				println(info(r.cc_exe))
@@ -238,10 +243,9 @@ fn main(){
 				println("r.history = $r.history")
 				println("r.last_edit_idx = $r.last_edit_idx")
 				println("r.current_idx = $r.current_idx")
-				println("r.ctxidx = $r.ctxidx")
 			}
 			'run' {
-				r.call_cc()
+				r.call_cc(-1,'',false)
 			}
 			'reset' {
 				reset_crepl(mut r)
@@ -273,52 +277,28 @@ fn main(){
 					continue
 				}
 
-				mut old_len := 0
+				mut push := line
+
+				mut bucket := 0
 				if line.starts_with('#') {
-					r.ctx = &r.source_buckets[0]
-					r.ctxidx = 0
-					old_len = r.ctx.source.len
+					bucket = 0
+					r.push_history(bucket)
 				} else {
-					r.ctx = &r.source_buckets[4]
-					r.ctxidx = 4
-					old_len = r.ctx.source.len
-					r.ctx.source.write_u8(`\t`)
+					bucket = 4
+					r.push_history(bucket)
 				}
 
 				if do_flush {
-					r.ctx.source.writeln(r.multiline_source.str())
+					push = r.multiline_source.str()
 					// sets length to 0, does not free; keeps cap
-				} else {
-					r.ctx.source.writeln(line)
 				}
 
-
-				if r.call_cc() {
+				if r.call_cc(bucket, push, bucket == 4) {
 					r.current_idx++
+					r.source_buckets[bucket].source.write_u8(`\t`)
+					r.source_buckets[bucket].source.writeln(push)
 					r.last_edit_idx = r.current_idx
-					if r.history.len <= r.current_idx {
-						r.history << HistoryRecord {
-							history_idx: old_len
-							source_bucket: r.ctxidx
-						}
-					} else {
-						r.history[r.current_idx] = HistoryRecord {
-							history_idx: old_len
-							source_bucket: r.ctxidx
-						}
-					}
-					
-					if r.history.len <= r.current_idx+1 {
-						r.history << HistoryRecord {
-							history_idx: r.ctx.source.len
-							source_bucket: r.ctxidx
-						}
-					} else {
-						r.history[r.current_idx+1] = HistoryRecord {
-							history_idx: r.ctx.source.len
-							source_bucket: r.ctxidx
-						}
-					}
+					r.push_history(bucket)
 				}
 				
 				if r.prompt != prompt_default {
@@ -329,6 +309,20 @@ fn main(){
 	}
 	if !is_pipe {
 		println('')
+	}
+}
+
+fn (mut r CREPL) push_history(b int) {
+	if r.history.len <= r.current_idx {
+		r.history << HistoryRecord {
+			history_idx: r.source_buckets[b].source.len
+			source_bucket: b
+		}
+	} else {
+		r.history[r.current_idx] = HistoryRecord {
+			history_idx: r.source_buckets[b].source.len
+			source_bucket: b
+		}
 	}
 }
 
