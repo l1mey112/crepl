@@ -3,17 +3,39 @@ import os
 import term
 import strings
 
-// always wondered why string_builder.str() cleared the array...
-// warning: somehow checks out, but very unsafe
-fn (mut c CREPL) accum_source() string {
-	concatlen := c.source.len + end.len
-	bcopy := unsafe { malloc_noscan(concatlen + 1) }
-	unsafe {
-		vmemcpy(bcopy, c.source.data , c.source.len)
-		vmemcpy(bcopy + c.source.len, end.str, end.len + 1) // + 1, .str already contains null terminator
-	}
-	return unsafe { bcopy.vstring_with_len(concatlen) }
+[if trace?]
+fn trace(str string){
+	eprintln(":: $str")
 }
+
+fn (mut c CREPL) accum_source() string {
+	// better to allocate all in one go...
+	mut len := end.len
+	for b in c.source_buckets {
+		len += b.source.len
+	}
+	mut a := strings.new_builder(len)
+	for b in c.source_buckets {
+		if b.source.len == 0 {
+			continue
+		}
+		a << b.source
+	}
+	a.write_string(end)
+	return a.str()
+}
+
+struct HistoryRecord {
+	history_idx int
+	source_bucket int = -1
+}
+
+struct SourceBucket {
+mut:
+	source strings.Builder
+}
+
+const source_bucket_count = 5
 
 struct CREPL {
 	cc string
@@ -22,15 +44,16 @@ mut:
 	readline readline.Readline
 	prompt string = prompt_default 
 
-	// undo redo operations
-	last_edit_idx int
+	source_buckets []SourceBucket = []SourceBucket{len: source_bucket_count}
+	history []HistoryRecord
+	last_edit_idx int = -1
 	current_idx int
-	history_idx []int
+
+	ctx &SourceBucket = unsafe { nil } // wooo scary!!!
+	ctxidx int = -1
 
 	brace_level int
 	multiline_source strings.Builder
-
-	source strings.Builder
 }
 
 const cc_list = {
@@ -51,6 +74,7 @@ fn get_cc_dir() (string, string) {
 
 fn (mut r CREPL) call_cc() bool {
 	os.write_file(tmp_file, r.accum_source()) or { panic(err) }
+	trace("wrote '$tmp_file'")
 
 	mut proc := os.new_process(r.cc_exe)
 	proc.set_args([tmp_file,'-o',tmp_exe])
@@ -58,11 +82,16 @@ fn (mut r CREPL) call_cc() bool {
 	proc.run()
 	proc.wait()
 	if proc.code != 0 {
+		trace("error from cc!")
 		eprintln(proc.stderr_slurp())
 		// essentially undo line now
-		unsafe { r.source.len = r.history_idx[r.current_idx] }
+		history := r.history[r.current_idx]
+		unsafe {
+			r.source_buckets[history.source_bucket].source.len = history.history_idx
+		}
 		return false
 	}
+	trace("cc exited successfully")
 	output := os.execute("./$tmp_exe").output
 	if output.len != 0 {
 		println(output)
@@ -70,28 +99,55 @@ fn (mut r CREPL) call_cc() bool {
 	return true
 }
 fn new_crepl() CREPL {
-	mut a := strings.new_builder(100)
-	a.write_string(begin)
 	cc_exe, cc := get_cc_dir()
-	mut history_idx := []int{cap: 21}
-	history_idx << begin.len
+	mut history := []HistoryRecord{cap: 20}
+	history << HistoryRecord{begin.len, 4}
 	return CREPL {
 		cc_exe: cc_exe
 		cc: cc
-		source: mut a
-		history_idx: mut history_idx 
+		history: history
 		multiline_source: strings.new_builder(40)
 	}
 }
 
-fn reset_crepl(mut r CREPL) {
-	// why waste precious time in freeing and reallocating?
-	unsafe {
-		r.source.len = begin.len
-		r.multiline_source.len = 0
-		r.history_idx.len = 1
+const include_header = 
+"#include <stdio.h>
+#include <string.h>
+#include <stddef.h>
+#include <stdint.h>
+"
+const begin =
+"
+int main(){
+"
+const end =
+"	return 0;
+}"
+
+fn (mut r CREPL) init_bucket (a int, data string) {
+	r.source_buckets[a].source.write_string(data)
+}
+fn init_all_buckets(mut r CREPL) {
+	for mut i in r.source_buckets {
+		i = SourceBucket {}
+		i.source = strings.new_builder(120)
 	}
-	r.current_idx = 0
+	r.init_bucket(0,include_header)
+	r.init_bucket(4,begin)
+}
+// 0. #includes
+// 1. Structs and typedefs
+// 2. Function declarations (hoisted)
+// 3. Function bodies
+// 4. Main Function
+// p.s: this is such an upgrade from igcc
+
+fn reset_crepl(mut r CREPL) {
+	unsafe {
+		r.multiline_source.len = 0
+		r.history.len = 1
+	}
+	init_all_buckets(mut r)
 }
 
 const is_pipe = os.is_atty(0) == 0
@@ -110,8 +166,23 @@ fn (mut r CREPL) line() ?string {
 	return rline
 }
 
+fn (mut r CREPL) undo()? {
+	trace("-- start undo")
+	if r.current_idx <= 0 {
+		trace("current_idx <= 0, no undo")
+		return error('')
+	} else {
+		r.current_idx--
+		trace("accessing history at $r.current_idx index")
+		history := r.history[r.current_idx]
+		trace("got $history")
+		unsafe { r.source_buckets[history.source_bucket].source.len = history.history_idx }
+		trace("decrement current_idx, is now $r.current_idx")
+	}
+}
+
 const welcome =
-// cool placeholder text
+/* cool placeholder text */
 "                                        mm\n"+
 "                                      *@@@\n"+
 "                                        @@\n"+
@@ -128,31 +199,20 @@ const welcome =
 const tmp_file = ".crepl_tmp.c"
 const tmp_exe = ".crepl_tmp_exe"
 
-const begin =
-"#include <stdio.h>
-#include <string.h>
-#include <stddef.h>
-#include <stdint.h>
-
-int main(){
-"
-const end =
-
-"	return 0;
-}"
-
 fn info(str string) string {
 	return term.magenta(str)
 }
 
 fn main(){
 	mut r := new_crepl()
+	init_all_buckets(mut r)
 	if !is_pipe {
-		eprintln(welcome)
-		eprintln(r.cc_exe)
-		eprintln('')
+		println(welcome)
+		println(r.cc_exe)
+		println('')
 	}
 	for {
+		trace("new iteration")
 		rline := r.line() or {
 			break
 		}
@@ -175,7 +235,7 @@ fn main(){
 				v_arg := cc_list[r.cc]["version"]
 				exec := os.execute("$r.cc_exe $v_arg")
 				if exec.exit_code != 0 {
-					panic("CC Version exited with nonzero exit code")
+					panic("cc version exited with nonzero exit code")
 				}
 				print(info(exec.output))
 			}
@@ -186,17 +246,15 @@ fn main(){
 				reset_crepl(mut r)
 			}
 			'undo' {
-				if r.current_idx <= 0 {
+				r.undo() or {
 					println(info("Nothing to undo"))
-				} else {
-					r.current_idx--
-					unsafe { r.source.len = r.history_idx[r.current_idx] }
 				}
 			}
 			'redo' {
 				if r.current_idx < r.last_edit_idx {
 					r.current_idx++
-					unsafe { r.source.len = r.history_idx[r.current_idx] }
+					history := r.history[r.current_idx]
+					unsafe { r.source_buckets[history.source_bucket].source.len = history.history_idx }
 				} else {
 					println(info("Nothing to redo"))
 				}
@@ -205,32 +263,60 @@ fn main(){
 				term.erase_clear()
 			}
 			else {
+				trace("got line!")
 				do_flush := r.count_braces(line)
-
+				
 				if r.brace_level != 0 {
+					trace("brace_level != 0")
 					r.prompt = prompt_indent
 					r.multiline_source.write_u8(`\t`)
 					r.multiline_source.writeln(line)
 					continue
 				}
 
+				if line.starts_with('#') {
+					trace("-- #include source bucket")
+					r.ctx = &r.source_buckets[0]
+					r.ctxidx = 0
+				} else {
+					trace("-- main source bucket")
+					r.ctx = &r.source_buckets[4]
+					r.ctxidx = 4
+					r.ctx.source.write_u8(`\t`)
+				}
+
 				if do_flush {
-					r.source.write_u8(`\t`)
-					r.source.writeln(r.multiline_source.str())
+					trace("brace_level == 0, flush buffer into source bucket")
+					r.ctx.source.writeln(r.multiline_source.str())
 					// sets length to 0, does not free; keeps cap
 				} else {
-					r.source.write_u8(`\t`)
-					r.source.writeln(line)
+					trace("write into source bucket")
+					r.ctx.source.writeln(line)
 				}
+
+				//trace("increment current_idx, is now $r.current_idx")
+				
+				trace("call cc")
 				if r.call_cc() {
+					trace("history.len $r.history.len, current_idx $r.current_idx")
 					r.current_idx++
-					if r.history_idx.len <= r.current_idx {
-						r.history_idx << r.source.len
+					if r.history.len <= r.current_idx {
+						trace("new append entry into history")
+						r.history << HistoryRecord {
+							history_idx: r.ctx.source.len
+							source_bucket: r.ctxidx
+						}
 					} else {
-						r.history_idx[r.current_idx] = r.source.len
+						trace("overwrite existing entry in history")
+						r.history[r.current_idx] = HistoryRecord {
+							history_idx: r.ctx.source.len
+							source_bucket: r.ctxidx
+						}
 					}
 					r.last_edit_idx = r.current_idx
+					trace("last_edit_idx = current_idx ($r.last_edit_idx)")
 				}
+				
 				if r.prompt != prompt_default {
 					r.prompt = prompt_default
 				}
@@ -252,6 +338,7 @@ fn (mut r CREPL) count_braces(s string) bool {
 			if r.brace_level == 0 {
 				// subject is uncooperative
 				// terminate now
+				// let the compilier deal with them
 				return false
 			}
 			r.brace_level--
