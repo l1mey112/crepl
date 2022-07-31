@@ -4,3 +4,4 @@ vls.log
 .vscode
 main
 *.c
+crepl

@@ -3,10 +3,10 @@ import os
 import term
 import strings
 
-[if trace?]
+/* [if trace?]
 fn trace(str string){
 	eprintln(":: $str")
-}
+} */
 
 fn (mut c CREPL) accum_source() string {
 	// better to allocate all in one go...
@@ -74,7 +74,6 @@ fn get_cc_dir() (string, string) {
 
 fn (mut r CREPL) call_cc() bool {
 	os.write_file(tmp_file, r.accum_source()) or { panic(err) }
-	trace("wrote '$tmp_file'")
 
 	mut proc := os.new_process(r.cc_exe)
 	proc.set_args([tmp_file,'-o',tmp_exe])
@@ -82,16 +81,18 @@ fn (mut r CREPL) call_cc() bool {
 	proc.run()
 	proc.wait()
 	if proc.code != 0 {
-		trace("error from cc!")
 		eprintln(proc.stderr_slurp())
 		// essentially undo line now
-		history := r.history[r.current_idx]
-		unsafe {
-			r.source_buckets[history.source_bucket].source.len = history.history_idx
+		if r.history.len == 0 {
+			init_all_buckets(mut r)
+		} else {
+			history := r.history[r.current_idx]
+			unsafe {
+				r.source_buckets[history.source_bucket].source.len = history.history_idx
+			}
 		}
 		return false
 	}
-	trace("cc exited successfully")
 	output := os.execute("./$tmp_exe").output
 	if output.len != 0 {
 		println(output)
@@ -101,7 +102,7 @@ fn (mut r CREPL) call_cc() bool {
 fn new_crepl() CREPL {
 	cc_exe, cc := get_cc_dir()
 	mut history := []HistoryRecord{cap: 20}
-	history << HistoryRecord{begin.len, 4}
+	//history << HistoryRecord{begin.len, 4}
 	return CREPL {
 		cc_exe: cc_exe
 		cc: cc
@@ -167,17 +168,12 @@ fn (mut r CREPL) line() ?string {
 }
 
 fn (mut r CREPL) undo()? {
-	trace("-- start undo")
 	if r.current_idx <= 0 {
-		trace("current_idx <= 0, no undo")
 		return error('')
 	} else {
 		r.current_idx--
-		trace("accessing history at $r.current_idx index")
 		history := r.history[r.current_idx]
-		trace("got $history")
 		unsafe { r.source_buckets[history.source_bucket].source.len = history.history_idx }
-		trace("decrement current_idx, is now $r.current_idx")
 	}
 }
 
@@ -212,7 +208,6 @@ fn main(){
 		println('')
 	}
 	for {
-		trace("new iteration")
 		rline := r.line() or {
 			break
 		}
@@ -239,6 +234,12 @@ fn main(){
 				}
 				print(info(exec.output))
 			}
+			'dump' {
+				println("r.history = $r.history")
+				println("r.last_edit_idx = $r.last_edit_idx")
+				println("r.current_idx = $r.current_idx")
+				println("r.ctxidx = $r.ctxidx")
+			}
 			'run' {
 				r.call_cc()
 			}
@@ -263,58 +264,61 @@ fn main(){
 				term.erase_clear()
 			}
 			else {
-				trace("got line!")
 				do_flush := r.count_braces(line)
 				
 				if r.brace_level != 0 {
-					trace("brace_level != 0")
 					r.prompt = prompt_indent
 					r.multiline_source.write_u8(`\t`)
 					r.multiline_source.writeln(line)
 					continue
 				}
 
+				mut old_len := 0
 				if line.starts_with('#') {
-					trace("-- #include source bucket")
 					r.ctx = &r.source_buckets[0]
 					r.ctxidx = 0
+					old_len = r.ctx.source.len
 				} else {
-					trace("-- main source bucket")
 					r.ctx = &r.source_buckets[4]
 					r.ctxidx = 4
+					old_len = r.ctx.source.len
 					r.ctx.source.write_u8(`\t`)
 				}
 
 				if do_flush {
-					trace("brace_level == 0, flush buffer into source bucket")
 					r.ctx.source.writeln(r.multiline_source.str())
 					// sets length to 0, does not free; keeps cap
 				} else {
-					trace("write into source bucket")
 					r.ctx.source.writeln(line)
 				}
 
-				//trace("increment current_idx, is now $r.current_idx")
-				
-				trace("call cc")
+
 				if r.call_cc() {
-					trace("history.len $r.history.len, current_idx $r.current_idx")
 					r.current_idx++
+					r.last_edit_idx = r.current_idx
 					if r.history.len <= r.current_idx {
-						trace("new append entry into history")
+						r.history << HistoryRecord {
+							history_idx: old_len
+							source_bucket: r.ctxidx
+						}
+					} else {
+						r.history[r.current_idx] = HistoryRecord {
+							history_idx: old_len
+							source_bucket: r.ctxidx
+						}
+					}
+					
+					if r.history.len <= r.current_idx+1 {
 						r.history << HistoryRecord {
 							history_idx: r.ctx.source.len
 							source_bucket: r.ctxidx
 						}
 					} else {
-						trace("overwrite existing entry in history")
-						r.history[r.current_idx] = HistoryRecord {
+						r.history[r.current_idx+1] = HistoryRecord {
 							history_idx: r.ctx.source.len
 							source_bucket: r.ctxidx
 						}
 					}
-					r.last_edit_idx = r.current_idx
-					trace("last_edit_idx = current_idx ($r.last_edit_idx)")
 				}
 				
 				if r.prompt != prompt_default {
