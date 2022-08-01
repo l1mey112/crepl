@@ -8,25 +8,20 @@ fn trace(str string){
 	eprintln(":: $str")
 } */
 
-fn (mut c CREPL) accum_source(bu int, s string, prepend_tab bool) string {
+fn (mut c CREPL) accum_source(bu int, s string) string {
 	// better to allocate all in one go...
-	mut len := end.len + s.len + int(prepend_tab)
+	mut len := end_file.len + s.len
 	for b in c.source_buckets {
 		len += b.source.len
 	}
 	mut a := strings.new_builder(len)
 	for idx, b in c.source_buckets {
-		if idx == bu {
-			if prepend_tab {
-				a.write_u8(`\t`)	
-			}
-			a.writeln(s)
-		} else if b.source.len == 0 {
-			continue
-		}
 		a << b.source
+		if idx == bu {
+			a.writeln(s)
+		}
 	}
-	a.write_string(end)
+	a.write_string(end_file)
 	return a.str()
 }
 
@@ -54,17 +49,21 @@ mut:
 	last_edit_idx int = -1
 	current_idx int
 
-//	ctx &SourceBucket = unsafe { nil } // wooo scary!!!
-//	ctxidx int = -1
-
+	brace_bucket int = -1
 	brace_level int
 	multiline_source strings.Builder
+
+	last_successful bool
+	last_output string = ' '
+
+	pref_pin bool
 }
 
 const cc_list = {
 	"tcc"   : {"version":"-v"}
 	"gcc"   : {"version":"--version"}
 	"clang" : {"version":"--version"}
+	"msvc"  : {"version":"--version"} // idk??? dont use windows...
 }
 
 fn get_cc_dir() (string, string) {
@@ -77,8 +76,8 @@ fn get_cc_dir() (string, string) {
 	panic("coult not find cc!!!!! todowo:")
 }
 
-fn (mut r CREPL) call_cc(b int, s string, pt bool) bool {
-	os.write_file(tmp_file, r.accum_source(b, s, pt)) or { panic(err) }
+fn (mut r CREPL) call_cc(b int, s string) bool {
+	os.write_file(tmp_file, r.accum_source(b, s)) or { panic(err) }
 
 	mut proc := os.new_process(r.cc_exe)
 	proc.set_args([tmp_file,'-o',tmp_exe])
@@ -99,8 +98,10 @@ fn (mut r CREPL) call_cc(b int, s string, pt bool) bool {
 		return false
 	}
 	output := os.execute("./$tmp_exe").output
-	if output.len != 0 {
-		println(output)
+	r.last_output = output
+	// successful, write now
+	if s.len != 0 {
+		r.source_buckets[b].source.writeln(s)
 	}
 	return true
 }
@@ -123,10 +124,9 @@ const include_header =
 #include <stdint.h>
 "
 const begin =
+"int main(){
 "
-int main(){
-"
-const end =
+const end_file =
 "	return 0;
 }"
 
@@ -139,6 +139,7 @@ fn init_all_buckets(mut r CREPL) {
 		i.source = strings.new_builder(120)
 	}
 	r.init_bucket(0,include_header)
+	r.init_bucket(1,'\n')
 	r.init_bucket(4,begin)
 }
 // 0. #includes
@@ -154,6 +155,7 @@ fn reset_crepl(mut r CREPL) {
 		r.history.len = 1
 	}
 	init_all_buckets(mut r)
+	r.last_successful = false
 }
 
 const is_pipe = os.is_atty(0) == 0
@@ -204,6 +206,61 @@ fn info(str string) string {
 	return term.magenta(str)
 }
 
+fn (mut r CREPL) list() {
+	println(format_c(r.accum_source(-1,'')))
+}
+
+fn (mut r CREPL) pin() {
+	term.erase_clear()
+	r.list()
+	println('')
+}
+
+// i have to make some compromises,
+// this is not a language server!
+const c_types = [
+	'void'
+	'int'
+	'double'
+	'float'
+	'char'
+	'long'
+	'short'
+	'int8_t'
+	'int16_t'
+	'int32_t'
+	'int64_t'
+	'uint8_t'
+	'uint16_t'
+	'uint32_t'
+	'uint64_t'
+]
+// assume line is already stripped of whitespace from start to end
+fn (mut r CREPL) parse_inital_line(s string) int {
+	if s.contains("=") {
+		return 4
+	} // apparently?
+	
+	if s.starts_with('#') {
+		return 0
+	} else if
+		(s.starts_with('struct')) || 
+		s.starts_with('typedef') 
+	{
+		return 1
+	}
+	// function 'parsing'
+	for ct in c_types {
+		if s.starts_with(ct) {
+			if s.contains("=") {
+				break
+			}
+			return 3
+		}
+	} // use binary search (highlight.v) yada yada yada
+	return 4
+}
+
 fn main(){
 	mut r := new_crepl()
 	init_all_buckets(mut r)
@@ -225,9 +282,7 @@ fn main(){
 		}
 		match line {
 			'exit' { break }
-			'list' {
-				println(info(r.accum_source(-1,'',false)))
-			}
+			'list' { r.list() }
 			'cc' {
 				println(info(r.cc_exe))
 			}
@@ -238,21 +293,35 @@ fn main(){
 					panic("cc version exited with nonzero exit code")
 				}
 				print(info(exec.output))
+				continue
 			}
-			'dump' {
+			'debug' {
 				println("r.history = $r.history")
 				println("r.last_edit_idx = $r.last_edit_idx")
 				println("r.current_idx = $r.current_idx")
+				continue
 			}
 			'run' {
-				r.call_cc(-1,'',false)
+				r.call_cc(-1,'')
 			}
 			'reset' {
 				reset_crepl(mut r)
+				if r.pref_pin {
+					r.pin()
+				}
+			}
+			'pin' {
+				r.pref_pin = !r.pref_pin
+				if r.pref_pin {
+					r.pin()
+				} else {
+					continue
+				}
 			}
 			'undo' {
 				r.undo() or {
 					println(info("Nothing to undo"))
+					continue
 				}
 			}
 			'redo' {
@@ -262,47 +331,69 @@ fn main(){
 					unsafe { r.source_buckets[history.source_bucket].source.len = history.history_idx }
 				} else {
 					println(info("Nothing to redo"))
+					continue
 				}
 			}
 			'clear' {
 				term.erase_clear()
+				continue
 			}
 			else {
-				do_flush := r.count_braces(line)
-				
-				if r.brace_level != 0 {
-					r.prompt = prompt_indent
-					r.multiline_source.write_u8(`\t`)
-					r.multiline_source.writeln(line)
-					continue
+				do_flush, just_entered := r.count_braces(line)
+
+				if just_entered {
+					r.brace_bucket = r.parse_inital_line(line)
+				} 
+				mut bucket := -1
+				if r.brace_level == 0 && !do_flush {
+					bucket = r.parse_inital_line(line)
+				} else {
+					bucket = r.brace_bucket
 				}
 
 				mut push := line
+				if bucket == 4 {
+					push = '\t' + push
+				}
 
-				mut bucket := 0
-				if line.starts_with('#') {
-					bucket = 0
-					r.push_history(bucket)
-				} else {
-					bucket = 4
-					r.push_history(bucket)
+				if r.brace_level != 0 {
+					r.prompt = prompt_indent
+					if !just_entered {
+						r.multiline_source.write_string('\t'.repeat(r.brace_level))
+					} else {
+						r.brace_bucket = bucket
+					}
+					r.multiline_source.writeln(push)
+					continue
 				}
 
 				if do_flush {
+					r.multiline_source.writeln(push)
 					push = r.multiline_source.str()
-					// sets length to 0, does not free; keeps cap
 				}
 
-				if r.call_cc(bucket, push, bucket == 4) {
+				r.push_history(bucket)
+				r.last_successful = r.call_cc(bucket, push)
+
+				if r.last_successful {
 					r.current_idx++
-					r.source_buckets[bucket].source.write_u8(`\t`)
-					r.source_buckets[bucket].source.writeln(push)
 					r.last_edit_idx = r.current_idx
-					r.push_history(bucket)
+					r.push_history(bucket) // this may be redundant?
 				}
 				
 				if r.prompt != prompt_default {
 					r.prompt = prompt_default
+				}
+			}
+		}
+		if r.last_successful {
+			if r.pref_pin {
+				r.pin()
+			}
+			if r.last_output.len != 0 {
+				println(r.last_output)
+				if r.pref_pin && r.last_output[r.last_output.len-1] != `\n` {
+					println('')
 				}
 			}
 		}
@@ -323,11 +414,11 @@ fn (mut r CREPL) push_history(b int) {
 			history_idx: r.source_buckets[b].source.len
 			source_bucket: b
 		}
-	}
+	} // if only there was a way to make this automatic
 }
 
 [direct_array_access]
-fn (mut r CREPL) count_braces(s string) bool {
+fn (mut r CREPL) count_braces(s string) (bool,bool) {
 	o_br := r.brace_level
 	for letter in s {
 		if letter == `{` {
@@ -337,11 +428,13 @@ fn (mut r CREPL) count_braces(s string) bool {
 				// subject is uncooperative
 				// terminate now
 				// let the compilier deal with them
-				return false
+				return false, false
 			}
 			r.brace_level--
 		}
 	}
-	return o_br != r.brace_level && r.brace_level == 0
-	// short circut action!
+	return 
+		o_br != r.brace_level && r.brace_level == 0,
+		o_br == 0 && r.brace_level != 0
+	// short circut action
 }
