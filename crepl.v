@@ -313,8 +313,10 @@ On a compiler error, the input is not committed and thus does not need
 to be undone.
 "
 
+const version_str = 'crepl v0.0.1 - l-m.dev'
+
 fn help(){
-	println("crepl v0.0.1 - l-m.dev")
+	println(version_str)
 	println(help_crepl)
 	for c, hc in help_commands {
 		println("${c}   ${hc[0]}")
@@ -354,7 +356,7 @@ fn crepl(opts CREPLopts){
 		match line {
 			'help' { help() continue}
 			'exit' { break }
-			'list' { r.list() }
+			'list' { r.list() continue }
 			'cc' {
 				println(info(r.cc_exe))
 				continue

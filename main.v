@@ -10,7 +10,7 @@ fn main(){
 	mut fp := flag.new_flag_parser(os.args)
 
 	fp.application("crepl")
-	fp.version('0.0.1 - lm')
+	fp.version(version_str)
 	fp.description('Compile and execute C code on the fly as you type it. Prefers tcc as the CC')
 	fp.skip_executable()
 
