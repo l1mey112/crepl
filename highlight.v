@@ -3,47 +3,47 @@ import term
 import strings
 
 const c_keywords = {
-	'signed'   : term.bold
-	'unsigned' : term.bold
-	'const'    : term.bold
-	'auto'     : term.bold
-	'register' : term.bold
-	'static'   : term.bold
-	'volatile' : term.bold
+	'signed'   : term.cyan
+	'unsigned' : term.cyan
+	'const'    : term.cyan
+	'auto'     : term.cyan
+	'register' : term.cyan
+	'static'   : term.cyan
+	'volatile' : term.cyan
 
-	'enum'     : term.bold
-	'struct'   : term.bold
-	'typedef'  : term.bold
-	'extern'   : term.bold
-	'sizeof'   : term.bold
-	'break'    : term.bold
-	'case'     : term.bold
-	'continue' : term.bold
-	'default'  : term.bold
-	'do'       : term.bold
-	'else'     : term.bold
-	'for'      : term.bold
-	'if'       : term.bold
-	'return'   : term.bold
-	'switch'   : term.bold
-	'union'    : term.bold
-	'while'    : term.bold
+	'enum'     : term.cyan
+	'struct'   : term.cyan
+	'typedef'  : term.cyan
+	'extern'   : term.cyan
+	'sizeof'   : term.cyan
+	'break'    : term.cyan
+	'case'     : term.cyan
+	'continue' : term.cyan
+	'default'  : term.cyan
+	'do'       : term.cyan
+	'else'     : term.cyan
+	'for'      : term.cyan
+	'if'       : term.cyan
+	'return'   : term.cyan
+	'switch'   : term.cyan
+	'union'    : term.cyan
+	'while'    : term.cyan
 
-	'double'   : term.bold
-	'float'    : term.bold
-	'char'     : term.bold
-	'int'      : term.bold
-	'long'     : term.bold
-	'short'    : term.bold
-	'void'     : term.bold
-	'int8_t'   : term.bold
-	'int16_t'  : term.bold
-	'int32_t'  : term.bold
-	'int64_t'  : term.bold
-	'uint8_t'  : term.bold
-	'uint16_t' : term.bold
-	'uint32_t' : term.bold
-	'uint64_t' : term.bold
+	'double'   : term.cyan
+	'float'    : term.cyan
+	'char'     : term.cyan
+	'int'      : term.cyan
+	'long'     : term.cyan
+	'short'    : term.cyan
+	'void'     : term.cyan
+	'int8_t'   : term.cyan
+	'int16_t'  : term.cyan
+	'int32_t'  : term.cyan
+	'int64_t'  : term.cyan
+	'uint8_t'  : term.cyan
+	'uint16_t' : term.cyan
+	'uint32_t' : term.cyan
+	'uint64_t' : term.cyan
 } // wanna change it? change it!
 
 [inline]
