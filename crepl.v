@@ -271,7 +271,7 @@ fn (mut r CREPL) parse_inital_line(s string) int {
 	// function 'parsing'
 	for ct in c_types {
 		if s.starts_with(ct) {
-			if s.contains("=") || !s.contains("(") {
+			if !s.contains("(") {
 				break
 			}
 			return 3
@@ -313,7 +313,7 @@ On a compiler error, the input is not committed and thus does not need
 to be undone.
 "
 
-const version_str = 'crepl v0.0.1 - l-m.dev'
+const version_str = 'v0.1.0 - l-m.dev'
 
 fn help(){
 	println(version_str)
