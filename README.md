@@ -15,5 +15,5 @@ First, install V ([vlang/v](https://github.com/vlang/v))
 
 Clone the repo and run:
 ```sh
-v . -o crepl
+v . -prod -o crepl
 ```
