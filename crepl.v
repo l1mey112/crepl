@@ -193,7 +193,7 @@ fn (mut r CREPL) line() ?string {
 	return rline
 }
 
-fn (mut r CREPL) undo()? {
+fn (mut r CREPL) undo()! {
 	if r.current_idx <= 0 {
 		return error('')
 	} else {
